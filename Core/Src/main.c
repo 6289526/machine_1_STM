@@ -19,6 +19,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -52,8 +53,10 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 
 typedef struct stm32ControllerData {
-	int FB_L;
-	int FB_R;
+	int FR;
+	int FL;
+	int BR;
+	int BL;
 } stm32ControllerData;
 
 typedef struct MotorConfig {
@@ -104,10 +107,10 @@ enum wheel {
 MotorConfig motor[5] =
 {
 // {min, stop, max}
-   {260, 750, 1100},  // FL
    {260, 750, 1100},  // FR
-   {260, 750, 1100},  // BL
-   {260, 750, 1100},   // BR
+   {260, 750, 1100},  // FL
+   {260, 750, 1100},  // BR
+   {260, 750, 1100},   // BL
    {260, 750, 1100}, // panta
 };
 
@@ -173,6 +176,8 @@ void Rotate_Servo(ServoNum m, int pwm) {
 	}
 }
 
+int sendo_moter_power = 0;
+
 void Move_Button(uint16_t button) {
 	if (button) {
 		uint16_t bit = 1;
@@ -183,13 +188,19 @@ void Move_Button(uint16_t button) {
 						Rotate_Motor(Pantagraph, motor[Pantagraph].MAX);
 						break;
 					case Right :
-						Rotate_Servo(Sendo, servo[Sendo].MAX);
+						if (servo[Sendo].STOP + (sendo_moter_power / 5) < servo[Sendo].MAX) {
+							++sendo_moter_power;
+						}
+						Rotate_Servo(Sendo, servo[Sendo].STOP + (sendo_moter_power / 5));
 						break;
 					case Down :
 						Rotate_Motor(Pantagraph, motor[Pantagraph].MIN);
 						break;
 					case Left :
-						Rotate_Servo(Sendo, servo[Sendo].STOP);
+						if (servo[Sendo].STOP + 35 < (sendo_moter_power / 5) + servo[Sendo].STOP) {
+							--sendo_moter_power;
+						}
+						Rotate_Servo(Sendo, (sendo_moter_power / 5) + servo[Sendo].STOP);
 						break;
 					case Square :
 						break;
@@ -203,6 +214,8 @@ void Move_Button(uint16_t button) {
 						break;
 					case L1 :
 						mode = Manual;
+						uint8_t h = 'M';
+						HAL_UART_Transmit(&huart3, (uint8_t * )&h,  sizeof(h), 0x1);
 						break;
 					case R1:
 						mode = Auto;
@@ -224,14 +237,15 @@ void Move_Button(uint16_t button) {
 }
 
 int pwm_val[4];
-uint8_t rec_buffer[3];
+uint8_t rec_buffer[5];
 stm32ControllerData stm32Controller;
 
 void Drive() {
-	pwm_val[FL] = stm32Controller.FB_L + motor[FL].STOP;
-	pwm_val[FR] = stm32Controller.FB_R + motor[FR].STOP;
-	pwm_val[BL] = stm32Controller.FB_L + motor[BL].STOP;
-	pwm_val[BR] = stm32Controller.FB_R + motor[BR].STOP;
+
+	pwm_val[FL] = stm32Controller.FL + motor[FL].STOP;
+	pwm_val[FR] = stm32Controller.FR + motor[FR].STOP;
+	pwm_val[BL] = stm32Controller.BL + motor[BL].STOP;
+	pwm_val[BR] = stm32Controller.BR + motor[BR].STOP;
 
 	for (int i = 0; i < 4; ++i) {
 		if(pwm_val[i] > motor[i].STOP) {
@@ -252,12 +266,14 @@ void Drive() {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart) {
 	if (mode == Auto) {
 		if (rec_buffer[0] == 'H') {
-			stm32Controller.FB_R = rec_buffer[1] - 100;
-			stm32Controller.FB_L = rec_buffer[2] - 100;
+			stm32Controller.FR = rec_buffer[1] - 100;
+			stm32Controller.FL = rec_buffer[2] - 100;
+			stm32Controller.BR = rec_buffer[3] - 100;
+			stm32Controller.BL = rec_buffer[4] - 100;
 		}
 	}
 
-	HAL_UART_Receive_IT(&huart3, rec_buffer, 3);
+	HAL_UART_Receive_IT(&huart3, rec_buffer, 5);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -339,23 +355,44 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // servo
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // servo
 
-  HAL_UART_Receive_IT(&huart3, rec_buffer, 3);
+  HAL_UART_Receive_IT(&huart3, rec_buffer, 5);
 
   while (1) {
 	  uint8_t tpip_key = '0';
 
-	  HAL_UART_Receive(&huart2, (uint8_t *)&tpip_key, sizeof(tpip_key), 0xF);
+	  HAL_UART_Receive(&huart2, (uint8_t *)&tpip_key, sizeof(tpip_key), 0x1);
 
-	  uint8_t power_R = 100; // receive data
-	  uint8_t power_L = 100; // receive data
+	  uint8_t power_FB_R = 100; // receive data
+	  uint8_t power_RL_R = 100; // receive data
+	  uint8_t power_RL_L = 100; // receive data
 
 	  if (mode == Manual) {
 		  if (tpip_key == 'H') {
-			  HAL_UART_Receive(&huart2, (uint8_t * )&power_R,  sizeof(power_R), 0xF);
-			  HAL_UART_Receive(&huart2, (uint8_t * )&power_L,  sizeof(power_L), 0xF);
+			  HAL_UART_Receive(&huart2, (uint8_t * )&power_FB_R,  sizeof(power_FB_R), 0x1);
+			  HAL_UART_Receive(&huart2, (uint8_t * )&power_RL_R,  sizeof(power_RL_R), 0x1);
+			  HAL_UART_Receive(&huart2, (uint8_t * )&power_RL_L,  sizeof(power_RL_L), 0x1);
 
-			  stm32Controller.FB_R = power_R - 100;
-			  stm32Controller.FB_L = power_L - 100;
+			  // turn
+			  if (5 < abs(power_RL_L - 100)) {
+				  stm32Controller.FR = power_RL_L - 100;
+				  stm32Controller.FL = power_RL_L - 100; stm32Controller.FL *= -1;
+				  stm32Controller.BR = power_RL_L - 100;
+				  stm32Controller.BL = power_RL_L - 100; stm32Controller.BL *= -1;
+			  }
+			  // side
+			  else if (abs(power_FB_R - 100) < abs(power_RL_R - 100)) {
+				  stm32Controller.FR = power_RL_R - 100; stm32Controller.FR *= -1;
+				  stm32Controller.FL = power_RL_R - 100;
+				  stm32Controller.BR = power_RL_R - 100;
+				  stm32Controller.BL = power_RL_R - 100; stm32Controller.BL *= -1;
+			  }
+			  // straight
+			  else {
+				  stm32Controller.FR = power_FB_R - 100;
+				  stm32Controller.FL = power_FB_R - 100;
+				  stm32Controller.BR = power_FB_R - 100;
+				  stm32Controller.BL = power_FB_R - 100;
+			  }
 		  }
 	  }
 
